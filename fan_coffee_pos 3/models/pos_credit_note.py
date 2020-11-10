@@ -53,10 +53,8 @@ class PosSession(models.Model):
         # E.g. `combine_receivables` is derived from pos.payment records
         # in the self.order_ids with group key of the `payment_method_id`
         # field of the pos.payment record.
-        def amounts(): return {'amount': 0.0, 'amount_converted': 0.0}
-
-        def tax_amounts(): return {'amount': 0.0, 'amount_converted': 0.0,
-                                   'base_amount': 0.0, 'base_amount_converted': 0.0}
+        amounts = lambda: {'amount': 0.0, 'amount_converted': 0.0}
+        tax_amounts = lambda: {'amount': 0.0, 'amount_converted': 0.0, 'base_amount': 0.0, 'base_amount_converted': 0.0}
         split_receivables = defaultdict(amounts)
         split_receivables_cash = defaultdict(amounts)
         combine_receivables = defaultdict(amounts)
@@ -69,38 +67,32 @@ class PosSession(models.Model):
         # Track the receivable lines of the invoiced orders' account moves for reconciliation
         # These receivable lines are reconciled to the corresponding invoice receivable lines
         # of this session's move_id.
-        order_account_move_receivable_lines = defaultdict(
-            lambda: self.env['account.move.line'])
+        order_account_move_receivable_lines = defaultdict(lambda: self.env['account.move.line'])
         rounded_globally = self.company_id.tax_calculation_rounding_method == 'round_globally'
         for order in self.order_ids:
-            # Combine pos receivable lines
-            # Separate cash payments for cash reconciliation later.
             if not order.is_delivery_note:
+                # Combine pos receivable lines
+                # Separate cash payments for cash reconciliation later.
                 for payment in order.payment_ids:
                     amount, date = payment.amount, payment.payment_date
                     if payment.payment_method_id.split_transactions:
                         if payment.payment_method_id.is_cash_count:
-                            split_receivables_cash[payment] = self._update_amounts(
-                                split_receivables_cash[payment], {'amount': amount}, date)
+                            split_receivables_cash[payment] = self._update_amounts(split_receivables_cash[payment], {'amount': amount}, date)
                         else:
-                            split_receivables[payment] = self._update_amounts(
-                                split_receivables[payment], {'amount': amount}, date)
+                            split_receivables[payment] = self._update_amounts(split_receivables[payment], {'amount': amount}, date)
                     else:
                         key = payment.payment_method_id
                         if payment.payment_method_id.is_cash_count:
-                            combine_receivables_cash[key] = self._update_amounts(
-                                combine_receivables_cash[key], {'amount': amount}, date)
+                            combine_receivables_cash[key] = self._update_amounts(combine_receivables_cash[key], {'amount': amount}, date)
                         else:
-                            combine_receivables[key] = self._update_amounts(
-                                combine_receivables[key], {'amount': amount}, date)
+                            combine_receivables[key] = self._update_amounts(combine_receivables[key], {'amount': amount}, date)
 
                 if order.is_invoiced:
                     # Combine invoice receivable lines
                     key = order.partner_id.property_account_receivable_id.id
-                    invoice_receivables[key] = self._update_amounts(invoice_receivables[key], {
-                                                                    'amount': order._get_amount_receivable()}, order.date_order)
+                    invoice_receivables[key] = self._update_amounts(invoice_receivables[key], {'amount': order._get_amount_receivable()}, order.date_order)
                     # side loop to gather receivable lines by account for reconciliation
-                    for move_line in order.account_move.line_ids.filtered(lambda aml: aml.account_id.internal_type == 'receivable'):
+                    for move_line in order.account_move.line_ids.filtered(lambda aml: aml.account_id.internal_type == 'receivable' and not aml.reconciled):
                         order_account_move_receivable_lines[move_line.account_id.id] |= move_line
                 else:
                     order_taxes = defaultdict(tax_amounts)
@@ -113,19 +105,16 @@ class PosSession(models.Model):
                             # sign
                             -1 if line['amount'] < 0 else 1,
                             # for taxes
-                            tuple((tax['id'], tax['account_id'], tax['tax_repartition_line_id'])
-                                  for tax in line['taxes']),
+                            tuple((tax['id'], tax['account_id'], tax['tax_repartition_line_id']) for tax in line['taxes']),
+                            line['base_tags'],
                         )
-                        sales[sale_key] = self._update_amounts(
-                            sales[sale_key], {'amount': line['amount']}, line['date_order'])
+                        sales[sale_key] = self._update_amounts(sales[sale_key], {'amount': line['amount']}, line['date_order'])
                         # Combine tax lines
                         for tax in line['taxes']:
-                            tax_key = (tax['account_id'], tax['tax_repartition_line_id'], tax['id'], tuple(
-                                tax['tag_ids']))
+                            tax_key = (tax['account_id'], tax['tax_repartition_line_id'], tax['id'], tuple(tax['tag_ids']))
                             order_taxes[tax_key] = self._update_amounts(
                                 order_taxes[tax_key],
-                                {'amount': tax['amount'],
-                                    'base_amount': tax['base']},
+                                {'amount': tax['amount'], 'base_amount': tax['base']},
                                 tax['date_order'],
                                 round=not rounded_globally
                             )
@@ -135,28 +124,29 @@ class PosSession(models.Model):
                         for amount_key, amount in amounts.items():
                             taxes[tax_key][amount_key] += amount
 
-                    if self.company_id.anglo_saxon_accounting:
+                    if self.company_id.anglo_saxon_accounting and order.picking_id.id:
                         # Combine stock lines
+                        order_pickings = self.env['stock.picking'].search([
+                            '|',
+                            ('origin', '=', '%s - %s' % (self.name, order.name)),
+                            ('id', '=', order.picking_id.id)
+                        ])
                         stock_moves = self.env['stock.move'].search([
-                            ('picking_id', '=', order.picking_id.id),
+                            ('picking_id', 'in', order_pickings.ids),
                             ('company_id.anglo_saxon_accounting', '=', True),
                             ('product_id.categ_id.property_valuation', '=', 'real_time')
                         ])
                         for move in stock_moves:
                             exp_key = move.product_id.property_account_expense_id or move.product_id.categ_id.property_account_expense_categ_id
                             out_key = move.product_id.categ_id.property_stock_account_output_categ_id
-                            amount = - \
-                                sum(move.stock_valuation_layer_ids.mapped('value'))
-                            stock_expense[exp_key] = self._update_amounts(stock_expense[exp_key], {
-                                                                          'amount': amount}, move.picking_id.date, force_company_currency=True)
-                            stock_output[out_key] = self._update_amounts(stock_output[out_key], {
-                                                                         'amount': amount}, move.picking_id.date, force_company_currency=True)
+                            amount = -sum(move.sudo().stock_valuation_layer_ids.mapped('value'))
+                            stock_expense[exp_key] = self._update_amounts(stock_expense[exp_key], {'amount': amount}, move.picking_id.date, force_company_currency=True)
+                            stock_output[out_key] = self._update_amounts(stock_output[out_key], {'amount': amount}, move.picking_id.date, force_company_currency=True)
 
                     # Increasing current partner's customer_rank
                     order.partner_id._increase_rank('customer_rank')
 
-        MoveLine = self.env['account.move.line'].with_context(
-            check_move_validity=False)
+        MoveLine = self.env['account.move.line'].with_context(check_move_validity=False)
 
         data.update({
             'taxes':                               taxes,
