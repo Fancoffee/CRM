@@ -1,7 +1,7 @@
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 {
     'name': 'POS Fan Coffee',
-    'version': '13.0.1.0.0',
+    'version': '13.0.1.0.1',
     'license': 'LGPL-3',
     'category': 'Point Of Sale',
     'sequence': 6,
