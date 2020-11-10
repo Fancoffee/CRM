@@ -52,7 +52,6 @@ class PosSession(models.Model):
     _inherit = "pos.session"
 
     def _accumulate_amounts(self, data):
-        _logger.info('22222222222222222222222222222222222222222222')
         # print("")
         # Accumulate the amounts for each accounting lines group
         # Each dict maps `key` -> `amounts`, where `key` is the group key.
@@ -185,5 +184,4 @@ class PosSession(models.Model):
             'order_account_move_receivable_lines': order_account_move_receivable_lines,
             'MoveLine':                            MoveLine
         })
-        _logger.info('22222222222222222222222222222222222222222222')
         return data
