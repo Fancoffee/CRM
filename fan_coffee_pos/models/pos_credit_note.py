@@ -3,6 +3,9 @@
 from collections import defaultdict
 from odoo import api, models, fields
 
+import logging
+
+_logger = logging.getLogger(__name__)
 
 class PosConfig(models.Model):
 
@@ -49,6 +52,8 @@ class PosSession(models.Model):
     _inherit = "pos.session"
 
     def _accumulate_amounts(self, data):
+        _logger.info('22222222222222222222222222222222222222222222')
+        # print("")
         # Accumulate the amounts for each accounting lines group
         # Each dict maps `key` -> `amounts`, where `key` is the group key.
         # E.g. `combine_receivables` is derived from pos.payment records
@@ -180,4 +185,5 @@ class PosSession(models.Model):
             'order_account_move_receivable_lines': order_account_move_receivable_lines,
             'MoveLine':                            MoveLine
         })
+        _logger.info('22222222222222222222222222222222222222222222')
         return data
